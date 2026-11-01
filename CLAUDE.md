@@ -19,4 +19,5 @@ payroll tax / remuneration) and saves it as a PDF on the phone.
 - Field map: dates `DDn/MMn/YYYYn` (1 = work from, 2 = work to, 3 = payment claim, 4 = Certificate of Currency,
   5 = date signed). `Tick2` = upper box (workers employed), `Tick1` = lower box (none / exempt).
 - Run locally: `python3 -m http.server 8765`, then open http://localhost:8765
-- When changing any file, bump `VERSION` in `sw.js` so installed phones pick up the update.
+- When changing any file, bump `VERSION` in `sw.js`, the `?v=` on the script tags and "Version N" in
+  `index.html`, so installed phones pick up the update (the user can read the version on the lock screen).

@@ -32,7 +32,7 @@
   .radio input { margin-top:3px; width:20px; height:20px; flex:none; }
   .hint { font-size:12px; color:var(--muted); margin:6px 0 0; }
   canvas { width:100%; height:150px; border:1px dashed var(--line); border-radius:8px; background:#fff; touch-action:none; display:block; }
-  button { font:inherit; border:0; border-radius:10px; padding:12px 14px; cursor:pointer; }
+  button { -webkit-tap-highlight-color:transparent; font:inherit; border:0; border-radius:10px; padding:12px 14px; cursor:pointer; }
   .btn { background:var(--brand); color:#fff; font-weight:600; }
   .btn2 { background:transparent; color:var(--text); border:1px solid var(--line); }
   .small { padding:8px 12px; font-size:14px; }
@@ -50,7 +50,8 @@
   #lock .btn { width:100%; }
   #lockMsg { color:var(--err); min-height:1.2em; margin:8px 0 0 !important; }
   .linkbtn { background:none; color:var(--muted); text-decoration:underline; padding:10px 0 0; font-size:14px; width:100%; }
-  .showpin { padding:0 0 10px; margin-top:-4px; text-align:right; }
+  .showpin { width:100%; margin:0 0 10px; padding:10px; font-size:15px; }
+  .ver { text-align:center; font-size:11px !important; margin:8px 0 0 !important; opacity:.6; }
   .filebtn { display:inline-block; margin:0; color:var(--text); border-radius:10px; cursor:pointer; }
   .tools { display:flex; gap:8px; flex-wrap:wrap; }
 </style>
@@ -61,11 +62,12 @@
     <h2 id="lockTitle">Enter your PIN</h2>
     <p id="lockText"></p>
     <input type="password" id="pin" autocomplete="off" inputmode="numeric" pattern="[0-9]*" aria-label="PIN" placeholder="PIN">
-    <button type="button" class="linkbtn showpin" id="showPin" aria-pressed="false">Show PIN</button>
     <div id="pin2Wrap" hidden><input type="password" id="pin2" autocomplete="off" inputmode="numeric" pattern="[0-9]*" aria-label="Confirm PIN" placeholder="Confirm PIN"></div>
+    <button type="button" class="btn2 showpin" id="showPin" aria-pressed="false">👁 Show PIN</button>
     <button type="submit" class="btn" id="unlockBtn">Unlock</button>
     <p id="lockMsg" role="alert"></p>
     <button type="button" class="linkbtn" id="forgot">Forgot PIN?</button>
+    <p class="ver">Version 4</p>
   </form>
 </div>
 <div id="app" hidden>
@@ -151,7 +153,7 @@
   <button type="button" class="btn2" id="share" hidden>Share</button>
 </div>
 </div>
-<script src="vendor/pdf-lib.min.js"></script>
-<script src="app.js"></script>
+<script src="vendor/pdf-lib.min.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

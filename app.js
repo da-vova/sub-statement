@@ -142,12 +142,15 @@
     $('pin').value = ''; $('pin').focus();
   }
 
-  $('showPin').onclick = () => {
+  // Keep the keyboard up: stop the button stealing focus from the PIN box on tap.
+  $('showPin').addEventListener('pointerdown', (e) => e.preventDefault());
+  $('showPin').addEventListener('mousedown', (e) => e.preventDefault());
+  $('showPin').addEventListener('click', () => {
     const show = $('pin').type === 'password';
     ['pin', 'pin2'].forEach((id) => { $(id).type = show ? 'text' : 'password'; });
-    $('showPin').textContent = show ? 'Hide PIN' : 'Show PIN';
+    $('showPin').textContent = show ? '🙈 Hide PIN' : '👁 Show PIN';
     $('showPin').setAttribute('aria-pressed', String(show));
-  };
+  });
 
   function unlocked(data) {
     $('lock').hidden = true; $('app').hidden = false;
@@ -270,7 +273,7 @@
   let templateBytes = null;
   async function template() {
     if (!templateBytes) {
-      const r = await fetch('template.pdf');
+      const r = await fetch('template.pdf', { cache: 'no-cache' });
       if (!r.ok) throw new Error('Could not load the form template');
       templateBytes = await r.arrayBuffer();
     }
