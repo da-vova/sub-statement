@@ -5,8 +5,10 @@ payroll tax / remuneration) and saves it as a PDF on the phone.
 
 - Stack: plain static HTML/JS, no build step. `pdf-lib` (vendored in `vendor/`) fills the official
   form's AcroForm fields in the browser, flattens them, stamps the drawn signature, and can append a
-  Certificate of Currency (PDF or photo) as extra pages. Nothing is uploaded; details + signature are
-  kept in the phone's localStorage.
+  Certificate of Currency (PDF or photo) as extra pages. Filled text is Helvetica-Bold, centred.
+  Nothing is uploaded. Details + signature are kept in localStorage, encrypted (AES-GCM, key from
+  PBKDF2 of the user's PIN) under `substatement.vault.v1`. PIN lock screen on open; auto-locks after
+  5 min in the background. Forgot PIN = wipe and start again.
 - Hosting: GitHub Pages from `main` (repo `da-vova/sub-statement`).
 - `template.pdf` = blank form, built from `sample.pdf` with `node scripts/make-template.mjs sample.pdf template.pdf`
   (strips the signature stamp). `sample.pdf` contains a real signature and is git-ignored. Never commit it.

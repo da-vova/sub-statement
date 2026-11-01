@@ -1,35 +1,138 @@
 /* Subcontractor's Statement filler. Everything runs in the browser; nothing is uploaded. */
 (() => {
-  const { PDFDocument, StandardFonts } = PDFLib;
+  const { PDFDocument, StandardFonts, TextAlignment } = PDFLib;
   const $ = (id) => document.getElementById(id);
-  const STORE = 'substatement.v1';
-  const SIG_STORE = 'substatement.sig.v1';
+  const VAULT = 'substatement.vault.v1';                       // encrypted {fields, sig}
+  const OLD_STORE = 'substatement.v1', OLD_SIG = 'substatement.sig.v1'; // pre-PIN plain storage
+  const AUTO_LOCK_MS = 5 * 60 * 1000;
 
-  /* ---------- saved details ---------- */
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
-    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+    set(k, v) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
     del(k) { try { localStorage.removeItem(k); } catch {} },
   };
 
-  function saveDetails() {
-    const data = {};
-    document.querySelectorAll('[data-keep]').forEach((el) => {
-      if (el.type === 'radio') { if (el.checked) data[el.name] = el.value; }
-      else data[el.id] = el.value;
-    });
-    store.set(STORE, JSON.stringify(data));
+  /* ---------- PIN vault: details + signature encrypted with AES-GCM, key derived from the PIN ---------- */
+  const b64 = (u8) => btoa(String.fromCharCode(...u8));
+  const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  let key = null, salt = null, sigData = null;
+
+  async function deriveKey(pin, saltBytes) {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: saltBytes, iterations: 250000, hash: 'SHA-256' },
+      base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   }
 
-  function loadDetails() {
-    let data = {};
-    try { data = JSON.parse(store.get(STORE) || '{}'); } catch {}
-    document.querySelectorAll('[data-keep]').forEach((el) => {
-      if (el.type === 'radio') el.checked = data[el.name] ? data[el.name] === el.value : el.checked;
-      else if (data[el.id] != null) el.value = data[el.id];
-    });
-    if (!$('signDate').value) $('signDate').value = new Date().toLocaleDateString('en-CA'); // yyyy-mm-dd, local time
+  async function writeVault(data) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key,
+      new TextEncoder().encode(JSON.stringify(data))));
+    store.set(VAULT, JSON.stringify({ salt: b64(salt), iv: b64(iv), ct: b64(ct) }));
   }
+
+  async function readVault(pin) {
+    const v = JSON.parse(store.get(VAULT));
+    const k = await deriveKey(pin, unb64(v.salt));
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(v.iv) }, k, unb64(v.ct)); // throws if PIN wrong
+    key = k; salt = unb64(v.salt);
+    return JSON.parse(new TextDecoder().decode(pt));
+  }
+
+  async function newVault(pin, data) {
+    salt = crypto.getRandomValues(new Uint8Array(16));
+    key = await deriveKey(pin, salt);
+    await writeVault(data);
+  }
+
+  function collect() {
+    const fields = {};
+    document.querySelectorAll('[data-keep]').forEach((el) => {
+      if (el.type === 'radio') { if (el.checked) fields[el.name] = el.value; }
+      else fields[el.id] = el.value;
+    });
+    return { fields, sig: sigData };
+  }
+
+  let saveTimer = null;
+  function saveDetails() {
+    if (!key) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => writeVault(collect()).catch((e) => console.error(e)), 300);
+  }
+
+  function applyData(data) {
+    const fields = (data && data.fields) || {};
+    document.querySelectorAll('[data-keep]').forEach((el) => {
+      if (el.type === 'radio') el.checked = fields[el.name] ? fields[el.name] === el.value : el.checked;
+      else if (fields[el.id] != null) el.value = fields[el.id];
+    });
+    $('signDate').value = new Date().toLocaleDateString('en-CA'); // today, yyyy-mm-dd local time
+    sigData = (data && data.sig) || null;
+    if (sigData) drawImageURL(sigData);
+  }
+
+  // Data saved before the PIN existed (plain localStorage) gets moved into the vault.
+  function legacyData() {
+    let fields = null;
+    try { fields = JSON.parse(store.get(OLD_STORE) || 'null'); } catch {}
+    const sig = store.get(OLD_SIG) || null;
+    return fields || sig ? { fields: fields || {}, sig } : null;
+  }
+
+  /* ---------- lock screen ---------- */
+  function showLock() {
+    const creating = !store.get(VAULT);
+    $('lockTitle').textContent = creating ? 'Create a PIN' : 'Enter your PIN';
+    $('lockText').textContent = creating
+      ? 'Pick a PIN (at least 4 digits). It locks your saved details and signature on this phone.'
+      : 'Your saved details are locked.';
+    $('pin2Wrap').hidden = !creating;
+    $('unlockBtn').textContent = creating ? 'Set PIN' : 'Unlock';
+    $('forgot').hidden = creating;
+    $('pin').value = ''; $('pin2').value = ''; $('lockMsg').textContent = '';
+    $('lock').hidden = false; $('app').hidden = true;
+    setTimeout(() => $('pin').focus(), 50);
+
+    $('lockForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const pin = $('pin').value.trim();
+      if (pin.length < 4) { $('lockMsg').textContent = 'PIN must be at least 4 digits.'; return; }
+      $('unlockBtn').disabled = true;
+      try {
+        if (creating) {
+          if (pin !== $('pin2').value.trim()) { $('lockMsg').textContent = "PINs don't match."; return; }
+          const old = legacyData();
+          await newVault(pin, old || { fields: {}, sig: null });
+          store.del(OLD_STORE); store.del(OLD_SIG);
+          unlocked(old);
+        } else {
+          unlocked(await readVault(pin));
+        }
+      } catch (err) {
+        console.error(err);
+        $('lockMsg').textContent = 'Wrong PIN.'; $('pin').value = ''; $('pin').focus();
+      } finally { $('unlockBtn').disabled = false; }
+    };
+  }
+
+  function unlocked(data) {
+    $('lock').hidden = true; $('app').hidden = false;
+    sizeCanvas();
+    applyData(data);
+  }
+
+  function lockNow() { key = null; salt = null; location.reload(); }
+
+  $('forgot').onclick = () => {
+    if (!confirm('Forgot your PIN? This deletes all saved details and the signature so you can start again.')) return;
+    store.del(VAULT); store.del(OLD_STORE); store.del(OLD_SIG); location.reload();
+  };
+
+  let hiddenAt = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) hiddenAt = Date.now();
+    else if (key && hiddenAt && Date.now() - hiddenAt > AUTO_LOCK_MS) lockNow();
+  });
 
   /* ---------- signature pad ---------- */
   const canvas = $('sig');
@@ -68,12 +171,12 @@
     ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
     last = p; hasInk = true;
   });
-  const end = () => { if (drawing) { drawing = false; store.set(SIG_STORE, trimmedSignature() || ''); } };
+  const end = () => { if (drawing) { drawing = false; sigData = trimmedSignature(); saveDetails(); } };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
   $('sigClear').onclick = () => {
     const r = canvas.getBoundingClientRect();
-    ctx.clearRect(0, 0, r.width, r.height); hasInk = false; store.del(SIG_STORE);
+    ctx.clearRect(0, 0, r.width, r.height); hasInk = false; sigData = null; saveDetails();
   };
 
   // PNG of just the inked area (transparent background), or null.
@@ -110,7 +213,7 @@
 
   async function buildPdf() {
     const doc = await PDFDocument.load(await template());
-    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const font = await doc.embedFont(StandardFonts.HelveticaBold); // filled-in text is bold
     const form = doc.getForm();
 
     const put = (name, value) => {
@@ -120,6 +223,7 @@
       let size = 10;
       while (size > 5 && font.widthOfTextAtSize(value, size) > w) size -= 0.5;
       f.setFontSize(size);
+      f.setAlignment(TextAlignment.Center);
       f.setText(value);
     };
     const putDate = (n, v) => { const [d, m, y] = splitDate(v); put('DD' + n, d); put('MM' + n, m); put('YYYY' + n, y); };
@@ -230,18 +334,29 @@
   };
 
   $('reset').onclick = () => {
-    if (!confirm('Clear all saved details and signature from this phone?')) return;
-    store.del(STORE); store.del(SIG_STORE);
-    $('f').reset(); $('sigClear').click(); loadDetails(); msg('Cleared.', 'ok');
+    if (!confirm('Delete all saved details, the signature and your PIN from this phone?')) return;
+    store.del(VAULT); store.del(OLD_STORE); store.del(OLD_SIG); location.reload();
+  };
+
+  $('lockBtn').onclick = lockNow;
+
+  $('changePin').onclick = async () => {
+    const pin = (prompt('New PIN (at least 4 digits):') || '').trim();
+    if (!pin) return;
+    if (pin.length < 4) return alert('PIN must be at least 4 digits.');
+    if ((prompt('Type the new PIN again:') || '').trim() !== pin) return alert("PINs don't match. PIN not changed.");
+    await newVault(pin, collect());
+    msg('PIN changed.', 'ok');
   };
 
   document.querySelectorAll('[data-keep]').forEach((el) => el.addEventListener('change', saveDetails));
 
   /* ---------- init ---------- */
-  loadDetails();
-  sizeCanvas();
-  const savedSig = store.get(SIG_STORE);
-  if (savedSig) drawImageURL(savedSig);
+  if (!window.crypto || !crypto.subtle) {
+    document.body.textContent = 'This app needs a secure (https) connection.';
+    return;
+  }
+  showLock();
   let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(sizeCanvas, 150); });
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
