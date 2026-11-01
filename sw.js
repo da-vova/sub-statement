@@ -1,5 +1,5 @@
 // Offline cache. Bump VERSION when any file changes so phones pick up the update.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const FILES = ['./', 'index.html', 'app.js', 'template.pdf', 'vendor/pdf-lib.min.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 self.addEventListener('install', (e) => {

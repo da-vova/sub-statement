@@ -9,6 +9,10 @@ payroll tax / remuneration) and saves it as a PDF on the phone.
   Nothing is uploaded. Details + signature are kept in localStorage, encrypted (AES-GCM, key from
   PBKDF2 of the user's PIN) under `substatement.vault.v1`. PIN lock screen on open; auto-locks after
   5 min in the background. Forgot PIN = wipe and start again.
+  5 wrong PINs in a row (counter `substatement.fails`) erases everything. Show/Hide PIN toggle.
+- Years print as 2 digits. Signature: draw it, or load an image ("Use signature image…"); an image is
+  placed where the original stamp was (x108 y138, 145x62pt). `my-signature.png` = signature extracted
+  from sample.pdf, git-ignored. Never commit it.
 - Hosting: GitHub Pages from `main` (repo `da-vova/sub-statement`).
 - `template.pdf` = blank form, built from `sample.pdf` with `node scripts/make-template.mjs sample.pdf template.pdf`
   (strips the signature stamp). `sample.pdf` contains a real signature and is git-ignored. Never commit it.

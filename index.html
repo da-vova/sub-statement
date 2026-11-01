@@ -50,6 +50,8 @@
   #lock .btn { width:100%; }
   #lockMsg { color:var(--err); min-height:1.2em; margin:8px 0 0 !important; }
   .linkbtn { background:none; color:var(--muted); text-decoration:underline; padding:10px 0 0; font-size:14px; width:100%; }
+  .showpin { padding:0 0 10px; margin-top:-4px; text-align:right; }
+  .filebtn { display:inline-block; margin:0; color:var(--text); border-radius:10px; cursor:pointer; }
   .tools { display:flex; gap:8px; flex-wrap:wrap; }
 </style>
 </head>
@@ -59,6 +61,7 @@
     <h2 id="lockTitle">Enter your PIN</h2>
     <p id="lockText"></p>
     <input type="password" id="pin" autocomplete="off" inputmode="numeric" pattern="[0-9]*" aria-label="PIN" placeholder="PIN">
+    <button type="button" class="linkbtn showpin" id="showPin" aria-pressed="false">Show PIN</button>
     <div id="pin2Wrap" hidden><input type="password" id="pin2" autocomplete="off" inputmode="numeric" pattern="[0-9]*" aria-label="Confirm PIN" placeholder="Confirm PIN"></div>
     <button type="submit" class="btn" id="unlockBtn">Unlock</button>
     <p id="lockMsg" role="alert"></p>
@@ -121,10 +124,11 @@
       <input type="text" id="position" data-keep>
       <label for="signDate">Date signed</label>
       <input type="date" id="signDate">
-      <label>Signature (draw with your finger)</label>
+      <label>Signature (draw with your finger, or use an image of your signature)</label>
       <canvas id="sig"></canvas>
       <div class="sigbar">
         <button type="button" class="btn2 small" id="sigClear">Clear</button>
+        <label class="btn2 small filebtn">Use signature image…<input type="file" id="sigFile" accept="image/*" hidden></label>
       </div>
       <p class="hint">Everything you type is saved on this phone, locked with your PIN, so next time you just change the dates. "Date signed" is set to today each time.</p>
     </section>

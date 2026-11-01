@@ -5,6 +5,8 @@
   const VAULT = 'substatement.vault.v1';                       // encrypted {fields, sig}
   const OLD_STORE = 'substatement.v1', OLD_SIG = 'substatement.sig.v1'; // pre-PIN plain storage
   const AUTO_LOCK_MS = 5 * 60 * 1000;
+  const FAILS = 'substatement.fails';  // wrong PIN attempts in a row
+  const MAX_FAILS = 5;                 // reaching this erases everything
 
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -15,7 +17,7 @@
   /* ---------- PIN vault: details + signature encrypted with AES-GCM, key derived from the PIN ---------- */
   const b64 = (u8) => btoa(String.fromCharCode(...u8));
   const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-  let key = null, salt = null, sigData = null;
+  let key = null, salt = null, sigData = null, sigKind = 'drawn'; // sigKind: 'drawn' | 'image'
 
   async function deriveKey(pin, saltBytes) {
     const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
@@ -50,7 +52,7 @@
       if (el.type === 'radio') { if (el.checked) fields[el.name] = el.value; }
       else fields[el.id] = el.value;
     });
-    return { fields, sig: sigData };
+    return { fields, sig: sigData, sigKind };
   }
 
   let saveTimer = null;
@@ -68,6 +70,7 @@
     });
     $('signDate').value = new Date().toLocaleDateString('en-CA'); // today, yyyy-mm-dd local time
     sigData = (data && data.sig) || null;
+    sigKind = (data && data.sigKind) || 'drawn';
     if (sigData) drawImageURL(sigData);
   }
 
@@ -89,7 +92,9 @@
     $('pin2Wrap').hidden = !creating;
     $('unlockBtn').textContent = creating ? 'Set PIN' : 'Unlock';
     $('forgot').hidden = creating;
-    $('pin').value = ''; $('pin2').value = ''; $('lockMsg').textContent = '';
+    $('pin').value = ''; $('pin2').value = '';
+    const fails = failCount();
+    $('lockMsg').textContent = !creating && fails ? `${MAX_FAILS - fails} attempt(s) left before everything is erased.` : '';
     $('lock').hidden = false; $('app').hidden = true;
     setTimeout(() => $('pin').focus(), 50);
 
@@ -106,14 +111,43 @@
           store.del(OLD_STORE); store.del(OLD_SIG);
           unlocked(old);
         } else {
-          unlocked(await readVault(pin));
+          let data;
+          try { data = await readVault(pin); }
+          catch (err) { return wrongPin(); }
+          store.del(FAILS);
+          unlocked(data);
         }
       } catch (err) {
         console.error(err);
-        $('lockMsg').textContent = 'Wrong PIN.'; $('pin').value = ''; $('pin').focus();
+        $('lockMsg').textContent = 'Something went wrong: ' + err.message;
       } finally { $('unlockBtn').disabled = false; }
     };
   }
+
+  function failCount() { return parseInt(store.get(FAILS) || '0', 10) || 0; }
+
+  function wipeAll() { [VAULT, OLD_STORE, OLD_SIG, FAILS].forEach((k) => store.del(k)); }
+
+  function wrongPin() {
+    const n = failCount() + 1;
+    if (n >= MAX_FAILS) {
+      wipeAll();
+      alert(`Wrong PIN ${MAX_FAILS} times in a row. All saved information has been erased.`);
+      location.reload();
+      return;
+    }
+    store.set(FAILS, String(n));
+    const left = MAX_FAILS - n;
+    $('lockMsg').textContent = `Wrong PIN. ${left} attempt${left === 1 ? '' : 's'} left before everything is erased.`;
+    $('pin').value = ''; $('pin').focus();
+  }
+
+  $('showPin').onclick = () => {
+    const show = $('pin').type === 'password';
+    ['pin', 'pin2'].forEach((id) => { $(id).type = show ? 'text' : 'password'; });
+    $('showPin').textContent = show ? 'Hide PIN' : 'Show PIN';
+    $('showPin').setAttribute('aria-pressed', String(show));
+  };
 
   function unlocked(data) {
     $('lock').hidden = true; $('app').hidden = false;
@@ -125,7 +159,7 @@
 
   $('forgot').onclick = () => {
     if (!confirm('Forgot your PIN? This deletes all saved details and the signature so you can start again.')) return;
-    store.del(VAULT); store.del(OLD_STORE); store.del(OLD_SIG); location.reload();
+    wipeAll(); location.reload();
   };
 
   let hiddenAt = 0;
@@ -171,12 +205,47 @@
     ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
     last = p; hasInk = true;
   });
-  const end = () => { if (drawing) { drawing = false; sigData = trimmedSignature(); saveDetails(); } };
+  const end = () => { if (drawing) { drawing = false; sigData = trimmedSignature(); sigKind = 'drawn'; saveDetails(); } };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
   $('sigClear').onclick = () => {
     const r = canvas.getBoundingClientRect();
-    ctx.clearRect(0, 0, r.width, r.height); hasInk = false; sigData = null; saveDetails();
+    ctx.clearRect(0, 0, r.width, r.height); hasInk = false; sigData = null; sigKind = 'drawn'; saveDetails();
+  };
+
+  // Signature from an image file (e.g. my-signature.png). Near-white pixels become transparent so a
+  // photo of a signature on paper doesn't cover the form's dotted line.
+  $('sigFile').onchange = async () => {
+    const file = $('sigFile').files[0];
+    if (!file) return;
+    try {
+      const bmp = await createImageBitmap(file);
+      const k = Math.min(1, 1500 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(bmp, 0, 0, c.width, c.height);
+      const im = g.getImageData(0, 0, c.width, c.height), px = im.data;
+      let x0 = c.width, y0 = c.height, x1 = -1, y1 = -1;
+      for (let i = 0; i < px.length; i += 4) {
+        const lum = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+        if (lum > 200) px[i + 3] = 0;
+        if (px[i + 3] > 10) {
+          const x = (i / 4) % c.width, y = Math.floor(i / 4 / c.width);
+          if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+      }
+      if (x1 < 0) throw new Error('No signature found in that image.');
+      g.putImageData(im, 0, 0);
+      const out = document.createElement('canvas');
+      out.width = x1 - x0 + 1; out.height = y1 - y0 + 1;
+      out.getContext('2d').drawImage(c, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+      sigData = out.toDataURL('image/png'); sigKind = 'image';
+      drawImageURL(sigData);
+      saveDetails();
+      msg('Signature loaded from file.', 'ok');
+    } catch (e) { console.error(e); msg('Could not use that image: ' + e.message, 'err'); }
+    $('sigFile').value = '';
   };
 
   // PNG of just the inked area (transparent background), or null.
@@ -226,7 +295,7 @@
       f.setAlignment(TextAlignment.Center);
       f.setText(value);
     };
-    const putDate = (n, v) => { const [d, m, y] = splitDate(v); put('DD' + n, d); put('MM' + n, m); put('YYYY' + n, y); };
+    const putDate = (n, v) => { const [d, m, y] = splitDate(v); put('DD' + n, d); put('MM' + n, m); put('YYYY' + n, y ? y.slice(-2) : ''); }; // 2-digit year
 
     put('Subcontractor/business name', $('subName').value);
     put('ABN', $('subAbn').value);
@@ -252,10 +321,11 @@
     try { form.removeField(form.getField('Signature')); } catch {}
     form.flatten();
 
-    const sig = trimmedSignature();
-    if (sig) {
-      const img = await doc.embedPng(sig);
-      const box = { x: 108, y: 152, w: 175, h: 40 }; // just above the "(f) Signature" line
+    if (sigData) {
+      const img = await doc.embedPng(sigData);
+      const box = sigKind === 'image'
+        ? { x: 108, y: 138, w: 145, h: 62 }  // same spot and size as the signature stamp on the original
+        : { x: 108, y: 152, w: 175, h: 40 }; // just above the "(f) Signature" line
       const s = Math.min(box.w / img.width, box.h / img.height);
       doc.getPages()[0].drawImage(img, { x: box.x, y: box.y, width: img.width * s, height: img.height * s });
     }
@@ -297,7 +367,7 @@
     const missing = [];
     [['subName', 'Subcontractor name'], ['prinName', 'Principal contractor'], ['from', 'Work from'], ['to', 'Work to'],
      ['person', 'Your full name'], ['signDate', 'Date signed']].forEach(([id, n]) => { if (!$(id).value.trim()) missing.push(n); });
-    if (!hasInk) missing.push('Signature');
+    if (!sigData) missing.push('Signature');
     return missing;
   }
 
