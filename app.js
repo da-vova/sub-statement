@@ -2,11 +2,15 @@
 (() => {
   const { PDFDocument, StandardFonts, TextAlignment } = PDFLib;
   const $ = (id) => document.getElementById(id);
-  const VAULT = 'substatement.vault.v1';                       // encrypted {fields, sig}
-  const OLD_STORE = 'substatement.v1', OLD_SIG = 'substatement.sig.v1'; // pre-PIN plain storage
+  // Accounts: each person has their own PIN and their own encrypted vault on this phone.
+  const ACCOUNTS = 'substatement.accounts';          // [{id, name}] (names only, not secret)
+  const LAST = 'substatement.last';                  // id of the last account used
+  const vaultKey = (id) => 'substatement.vault.' + id;
+  const failKey = (id) => 'substatement.fails.' + id;
+  const V1_VAULT = 'substatement.vault.v1', V1_FAILS = 'substatement.fails'; // single-PIN version
+  const OLD_STORE = 'substatement.v1', OLD_SIG = 'substatement.sig.v1';     // pre-PIN plain storage
   const AUTO_LOCK_MS = 5 * 60 * 1000;
-  const FAILS = 'substatement.fails';  // wrong PIN attempts in a row
-  const MAX_FAILS = 5;                 // reaching this erases everything
+  const MAX_FAILS = 5;                 // wrong PINs in a row that erase that account
 
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -14,10 +18,27 @@
     del(k) { try { localStorage.removeItem(k); } catch {} },
   };
 
-  /* ---------- PIN vault: details + signature encrypted with AES-GCM, key derived from the PIN ---------- */
+  const accounts = () => { try { return JSON.parse(store.get(ACCOUNTS) || '[]'); } catch { return []; } };
+  const saveAccounts = (list) => store.set(ACCOUNTS, JSON.stringify(list));
+  const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+  // The single-PIN version becomes "Account 1".
+  (function migrate() {
+    const v1 = store.get(V1_VAULT);
+    if (!v1) return;
+    const list = accounts();
+    const id = newId();
+    list.push({ id, name: 'Account 1' });
+    store.set(vaultKey(id), v1);
+    const f = store.get(V1_FAILS); if (f) store.set(failKey(id), f);
+    saveAccounts(list); store.set(LAST, id);
+    store.del(V1_VAULT); store.del(V1_FAILS);
+  })();
+
+  /* ---------- vault: details + signature encrypted with AES-GCM, key derived from the PIN ---------- */
   const b64 = (u8) => btoa(String.fromCharCode(...u8));
   const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-  let key = null, salt = null, sigData = null, sigKind = 'drawn'; // sigKind: 'drawn' | 'image'
+  let acct = null, key = null, salt = null, sigData = null, sigKind = 'drawn'; // sigKind: 'drawn' | 'image'
 
   async function deriveKey(pin, saltBytes) {
     const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
@@ -29,14 +50,14 @@
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key,
       new TextEncoder().encode(JSON.stringify(data))));
-    store.set(VAULT, JSON.stringify({ salt: b64(salt), iv: b64(iv), ct: b64(ct) }));
+    store.set(vaultKey(acct.id), JSON.stringify({ salt: b64(salt), iv: b64(iv), ct: b64(ct) }));
   }
 
-  async function readVault(pin) {
-    const v = JSON.parse(store.get(VAULT));
+  async function readVault(a, pin) {
+    const v = JSON.parse(store.get(vaultKey(a.id)));
     const k = await deriveKey(pin, unb64(v.salt));
     const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(v.iv) }, k, unb64(v.ct)); // throws if PIN wrong
-    key = k; salt = unb64(v.salt);
+    acct = a; key = k; salt = unb64(v.salt);
     return JSON.parse(new TextDecoder().decode(pt));
   }
 
@@ -74,7 +95,7 @@
     if (sigData) drawImageURL(sigData);
   }
 
-  // Data saved before the PIN existed (plain localStorage) gets moved into the vault.
+  // Data saved before the PIN existed (plain localStorage) goes into the first account created.
   function legacyData() {
     let fields = null;
     try { fields = JSON.parse(store.get(OLD_STORE) || 'null'); } catch {}
@@ -82,39 +103,69 @@
     return fields || sig ? { fields: fields || {}, sig } : null;
   }
 
-  /* ---------- lock screen ---------- */
-  function showLock() {
-    const creating = !store.get(VAULT);
-    $('lockTitle').textContent = creating ? 'Create a PIN' : 'Enter your PIN';
-    $('lockText').textContent = creating
-      ? 'Pick a PIN (at least 4 digits). It locks your saved details and signature on this phone.'
-      : 'Your saved details are locked.';
-    $('pin2Wrap').hidden = !creating;
-    $('unlockBtn').textContent = creating ? 'Set PIN' : 'Unlock';
-    $('forgot').hidden = creating;
-    $('pin').value = ''; $('pin2').value = '';
-    const fails = failCount();
-    $('lockMsg').textContent = !creating && fails ? `${MAX_FAILS - fails} attempt(s) left before everything is erased.` : '';
+  /* ---------- lock screen: pick account / create account / enter PIN ---------- */
+  let lockAcct = null; // account shown on the PIN screen
+  function setMode(mode, a) {
+    lockAcct = a || null;
+    const list = accounts();
     $('lock').hidden = false; $('app').hidden = true;
-    setTimeout(() => $('pin').focus(), 50);
+    $('lockMsg').textContent = '';
+    $('pin').value = ''; $('pin2').value = ''; $('acctName').value = '';
+    $('acctList').hidden = mode !== 'pick';
+    $('addAcct').hidden = mode !== 'pick';
+    $('pinArea').hidden = mode === 'pick';
+    $('nameWrap').hidden = mode !== 'create';
+    $('pin2Wrap').hidden = mode !== 'create';
+    $('forgot').hidden = mode !== 'unlock';
+    $('backBtn').hidden = mode === 'pick' || (mode === 'create' && !list.length);
+    $('backBtn').textContent = mode === 'unlock' && list.length === 1 ? 'Add another account' : 'Switch account';
+
+    if (mode === 'pick') {
+      $('lockTitle').textContent = 'Who is signing?';
+      $('lockText').textContent = 'Pick your account.';
+      const box = $('acctList'); box.textContent = '';
+      list.forEach((x) => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'btn2 acct'; b.textContent = x.name;
+        b.onclick = () => setMode('unlock', x);
+        box.appendChild(b);
+      });
+    } else if (mode === 'create') {
+      $('lockTitle').textContent = list.length ? 'New account' : 'Create your account';
+      $('lockText').textContent = 'Each person gets their own PIN. Their details and signature are locked with it on this phone.';
+      $('unlockBtn').textContent = 'Create account';
+      setTimeout(() => $('acctName').focus(), 50);
+    } else {
+      $('lockTitle').textContent = a.name;
+      $('lockText').textContent = 'Enter your PIN.';
+      $('unlockBtn').textContent = 'Unlock';
+      const fails = failCount(a);
+      if (fails) $('lockMsg').textContent = `${MAX_FAILS - fails} attempt(s) left before this account is erased.`;
+      setTimeout(() => $('pin').focus(), 50);
+    }
 
     $('lockForm').onsubmit = async (e) => {
       e.preventDefault();
+      if (mode === 'pick') return;
       const pin = $('pin').value.trim();
+      if (mode === 'create' && !$('acctName').value.trim()) { $('lockMsg').textContent = 'Enter a name for this account.'; return; }
       if (pin.length < 4) { $('lockMsg').textContent = 'PIN must be at least 4 digits.'; return; }
       $('unlockBtn').disabled = true;
       try {
-        if (creating) {
+        if (mode === 'create') {
           if (pin !== $('pin2').value.trim()) { $('lockMsg').textContent = "PINs don't match."; return; }
-          const old = legacyData();
+          const all = accounts();
+          acct = { id: newId(), name: $('acctName').value.trim() };
+          const old = all.length ? null : legacyData();
           await newVault(pin, old || { fields: {}, sig: null });
+          all.push(acct); saveAccounts(all);
           store.del(OLD_STORE); store.del(OLD_SIG);
           unlocked(old);
         } else {
           let data;
-          try { data = await readVault(pin); }
-          catch (err) { return wrongPin(); }
-          store.del(FAILS);
+          try { data = await readVault(a, pin); }
+          catch (err) { return wrongPin(a); }
+          store.del(failKey(a.id));
           unlocked(data);
         }
       } catch (err) {
@@ -124,21 +175,40 @@
     };
   }
 
-  function failCount() { return parseInt(store.get(FAILS) || '0', 10) || 0; }
+  function showLock() {
+    const list = accounts();
+    if (!list.length) return setMode('create');
+    const last = list.find((x) => x.id === store.get(LAST));
+    if (list.length === 1) return setMode('unlock', list[0]);
+    if (last) return setMode('unlock', last);
+    setMode('pick');
+  }
 
-  function wipeAll() { [VAULT, OLD_STORE, OLD_SIG, FAILS].forEach((k) => store.del(k)); }
+  $('addAcct').onclick = () => setMode('create');
+  $('backBtn').onclick = () => {
+    if (accounts().length === 1 && $('backBtn').textContent === 'Add another account') setMode('create');
+    else setMode('pick');
+  };
 
-  function wrongPin() {
-    const n = failCount() + 1;
+  function failCount(a) { return parseInt(store.get(failKey(a.id)) || '0', 10) || 0; }
+
+  function deleteAccount(a) {
+    store.del(vaultKey(a.id)); store.del(failKey(a.id));
+    saveAccounts(accounts().filter((x) => x.id !== a.id));
+    if (store.get(LAST) === a.id) store.del(LAST);
+  }
+
+  function wrongPin(a) {
+    const n = failCount(a) + 1;
     if (n >= MAX_FAILS) {
-      wipeAll();
-      alert(`Wrong PIN ${MAX_FAILS} times in a row. All saved information has been erased.`);
+      deleteAccount(a);
+      alert(`Wrong PIN ${MAX_FAILS} times in a row. All saved information for "${a.name}" has been erased.`);
       location.reload();
       return;
     }
-    store.set(FAILS, String(n));
+    store.set(failKey(a.id), String(n));
     const left = MAX_FAILS - n;
-    $('lockMsg').textContent = `Wrong PIN. ${left} attempt${left === 1 ? '' : 's'} left before everything is erased.`;
+    $('lockMsg').textContent = `Wrong PIN. ${left} attempt${left === 1 ? '' : 's'} left before this account is erased.`;
     $('pin').value = ''; $('pin').focus();
   }
 
@@ -153,21 +223,31 @@
   });
 
   function unlocked(data) {
+    store.set(LAST, acct.id);
+    $('acctLabel').textContent = 'Account: ' + acct.name;
     $('lock').hidden = true; $('app').hidden = false;
     sizeCanvas();
     applyData(data);
   }
 
-  function lockNow() { key = null; salt = null; location.reload(); }
+  // Write any pending changes now (used before locking / when the app goes to the background).
+  async function flushSave() {
+    clearTimeout(saveTimer);
+    if (key && acct) { try { await writeVault(collect()); } catch (e) { console.error(e); } }
+  }
+
+  async function lockNow() { await flushSave(); key = null; salt = null; acct = null; location.reload(); }
 
   $('forgot').onclick = () => {
-    if (!confirm('Forgot your PIN? This deletes all saved details and the signature so you can start again.')) return;
-    wipeAll(); location.reload();
+    const a = lockAcct;
+    if (!a) return;
+    if (!confirm(`Forgot the PIN for "${a.name}"? This deletes that account's saved details and signature. Other accounts are not affected.`)) return;
+    deleteAccount(a); location.reload();
   };
 
   let hiddenAt = 0;
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) hiddenAt = Date.now();
+    if (document.hidden) { hiddenAt = Date.now(); flushSave(); }
     else if (key && hiddenAt && Date.now() - hiddenAt > AUTO_LOCK_MS) lockNow();
   });
 
@@ -407,11 +487,19 @@
   };
 
   $('reset').onclick = () => {
-    if (!confirm('Delete all saved details, the signature and your PIN from this phone?')) return;
-    store.del(VAULT); store.del(OLD_STORE); store.del(OLD_SIG); location.reload();
+    if (!confirm(`Delete the account "${acct.name}" with its saved details, signature and PIN? Other accounts are not affected.`)) return;
+    deleteAccount(acct); store.del(OLD_STORE); store.del(OLD_SIG); key = null; acct = null; location.reload();
   };
 
   $('lockBtn').onclick = lockNow;
+
+  $('renameAcct').onclick = () => {
+    const name = (prompt('Account name:', acct.name) || '').trim();
+    if (!name) return;
+    acct.name = name;
+    saveAccounts(accounts().map((x) => (x.id === acct.id ? { ...x, name } : x)));
+    $('acctLabel').textContent = 'Account: ' + name;
+  };
 
   $('changePin').onclick = async () => {
     const pin = (prompt('New PIN (at least 4 digits):') || '').trim();
@@ -422,7 +510,7 @@
     msg('PIN changed.', 'ok');
   };
 
-  document.querySelectorAll('[data-keep]').forEach((el) => el.addEventListener('change', saveDetails));
+  document.querySelectorAll('[data-keep]').forEach((el) => { el.addEventListener('input', saveDetails); el.addEventListener('change', saveDetails); });
 
   /* ---------- init ---------- */
   if (!window.crypto || !crypto.subtle) {

@@ -53,6 +53,10 @@
   .showpin { width:100%; margin:0 0 10px; padding:10px; font-size:15px; }
   .ver { text-align:center; font-size:11px !important; margin:8px 0 0 !important; opacity:.6; }
   .filebtn { display:inline-block; margin:0; color:var(--text); border-radius:10px; cursor:pointer; }
+  .acctlist { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
+  .acct { width:100%; text-align:left; font-size:17px; padding:14px; }
+  #lock input.namein { letter-spacing:normal; font-size:18px; text-align:left; }
+  .acctlabel { font-weight:600; opacity:1 !important; margin-top:4px !important; }
   .tools { display:flex; gap:8px; flex-wrap:wrap; }
 </style>
 </head>
@@ -61,19 +65,26 @@
   <form id="lockForm" autocomplete="off">
     <h2 id="lockTitle">Enter your PIN</h2>
     <p id="lockText"></p>
+    <div id="acctList" class="acctlist" hidden></div>
+    <button type="button" class="btn" id="addAcct" hidden>+ Add account</button>
+    <div id="pinArea">
+    <div id="nameWrap" hidden><input type="text" id="acctName" autocomplete="off" aria-label="Your name" placeholder="Your name" class="namein"></div>
     <input type="password" id="pin" autocomplete="off" inputmode="numeric" pattern="[0-9]*" aria-label="PIN" placeholder="PIN">
     <div id="pin2Wrap" hidden><input type="password" id="pin2" autocomplete="off" inputmode="numeric" pattern="[0-9]*" aria-label="Confirm PIN" placeholder="Confirm PIN"></div>
     <button type="button" class="btn2 showpin" id="showPin" aria-pressed="false">👁 Show PIN</button>
     <button type="submit" class="btn" id="unlockBtn">Unlock</button>
     <p id="lockMsg" role="alert"></p>
     <button type="button" class="linkbtn" id="forgot">Forgot PIN?</button>
-    <p class="ver">Version 4</p>
+    <button type="button" class="linkbtn" id="backBtn">Switch account</button>
+    </div>
+    <p class="ver">Version 5</p>
   </form>
 </div>
 <div id="app" hidden>
 <header>
   <h1>Subcontractor's Statement</h1>
   <p>NSW Workers Comp / Payroll Tax / Remuneration</p>
+  <p id="acctLabel" class="acctlabel"></p>
 </header>
 <main>
   <form id="f" autocomplete="on" onsubmit="return false">
@@ -141,9 +152,10 @@
       <input type="file" id="cocFile" accept="application/pdf,image/*">
     </section>
     <div class="tools">
-      <button type="button" class="btn2 small" id="lockBtn">Lock now</button>
+      <button type="button" class="btn2 small" id="lockBtn">Lock / switch account</button>
       <button type="button" class="btn2 small" id="changePin">Change PIN</button>
-      <button type="button" class="btn2 small" id="reset">Delete saved details</button>
+      <button type="button" class="btn2 small" id="renameAcct">Rename account</button>
+      <button type="button" class="btn2 small" id="reset">Delete this account</button>
     </div>
     <p id="msg" role="status"></p>
   </form>
@@ -153,7 +165,7 @@
   <button type="button" class="btn2" id="share" hidden>Share</button>
 </div>
 </div>
-<script src="vendor/pdf-lib.min.js?v=4"></script>
-<script src="app.js?v=4"></script>
+<script src="vendor/pdf-lib.min.js?v=5"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

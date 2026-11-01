@@ -6,10 +6,11 @@ payroll tax / remuneration) and saves it as a PDF on the phone.
 - Stack: plain static HTML/JS, no build step. `pdf-lib` (vendored in `vendor/`) fills the official
   form's AcroForm fields in the browser, flattens them, stamps the drawn signature, and can append a
   Certificate of Currency (PDF or photo) as extra pages. Filled text is Helvetica-Bold, centred.
-  Nothing is uploaded. Details + signature are kept in localStorage, encrypted (AES-GCM, key from
-  PBKDF2 of the user's PIN) under `substatement.vault.v1`. PIN lock screen on open; auto-locks after
-  5 min in the background. Forgot PIN = wipe and start again.
-  5 wrong PINs in a row (counter `substatement.fails`) erases everything. Show/Hide PIN toggle.
+  Nothing is uploaded. Multiple accounts (one per person): list in `substatement.accounts` [{id,name}];
+  each has its own vault `substatement.vault.<id>` (AES-GCM, key from PBKDF2 of that person's PIN) and
+  fail counter `substatement.fails.<id>`; 5 wrong PINs in a row erases only that account. The old
+  single-PIN vault (`substatement.vault.v1`) is migrated to "Account 1". Saves on every keystroke and
+  flushes before locking. Auto-locks after 5 min in the background. Show/Hide PIN toggle.
 - Years print as 2 digits. Signature: draw it, or load an image ("Use signature image…"); an image is
   placed where the original stamp was (x108 y138, 145x62pt). `my-signature.png` = signature extracted
   from sample.pdf, git-ignored. Never commit it.
